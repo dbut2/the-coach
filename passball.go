@@ -147,6 +147,7 @@ func randomPhrase(from, to string) string {
 
 	return buf.String()
 }
+
 func parseUserGroupID(s string) (string, bool) {
 	r, err := regexp.Compile("<!subteam\\^(.*)\\|@.*>")
 	if err != nil {
