@@ -111,9 +111,10 @@ func passBall(w http.ResponseWriter, s slack.SlashCommand) {
 		return
 	}
 
-	w.WriteHeader(http.StatusOK)
-	_, err = w.Write([]byte("{\"response_type\": \"in_channel\"}"))
-	handleError(err, w, errMessage)
+	w.Header().Set("content-type", "application/json")
+	if hadError(err, w, errMessage) {
+		return
+	}
 }
 
 //go:embed phrases.txt
