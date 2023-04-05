@@ -63,45 +63,65 @@ func passBall(w http.ResponseWriter, s slack.SlashCommand) {
 		return
 	}
 
-	userGroupID, has := parseUserGroupID(split[0])
-	if !has {
+	userGroupID, is := parseUserGroupID(split[0])
+	if !is {
 		handleError(fmt.Errorf("invalid usergroup: %s", split[0]), w, "Please supply a valid user group")
 		return
 	}
 
 	if len(split) < 2 {
-		handleError(errors.New("no receiver supplied"), w, "Please supply a user or user group receiver")
+		handleError(errors.New("no receiver supplied"), w, "Please supply at least one user or user group receiver")
 		return
 	}
 
 	sc := slack.New(os.Getenv("SLACK_BOT_TOKEN"))
 
-	parsed := false
-	var newUserID string
+	var candidates []string
 
-	if receiverUserGroupID, has := parseUserGroupID(split[1]); has {
-		userIDs, err := sc.GetUserGroupMembers(receiverUserGroupID)
-		if hadError(err, w, errMessage) {
+	for _, receiver := range split[1:] {
+		parsed := false
+
+		if receiverUserGroupID, is := parseUserGroupID(receiver); is {
+			userIDs, err := sc.GetUserGroupMembers(receiverUserGroupID)
+			if hadError(err, w, errMessage) {
+				return
+			}
+
+			parsed = true
+			candidates = union(candidates, userIDs)
+		}
+
+		if receiverUserID, is := parseUserID(receiver); is {
+			parsed = true
+			candidates = union(candidates, []string{receiverUserID})
+		}
+
+		if receiverChannelID, is := parseChannelID(receiver); is {
+			userIDs, _, err := sc.GetUsersInConversation(&slack.GetUsersInConversationParameters{
+				ChannelID: receiverChannelID,
+			})
+			if hadError(err, w, errMessage) {
+				return
+			}
+
+			parsed = true
+			candidates = union(candidates, userIDs)
+		}
+
+		if !parsed {
+			handleError(fmt.Errorf("invalid receiver: %s", receiver), w, "Please supply valid user or user group receivers")
 			return
 		}
-
-		if len(userIDs) > 0 {
-			parsed = true
-			newUserID = userIDs[rand.Intn(len(userIDs))]
-		}
 	}
 
-	if receiverUserID, has := parseUserID(split[1]); has {
-		parsed = true
-		newUserID = receiverUserID
-	}
-
-	if !parsed || newUserID == "" {
-		handleError(fmt.Errorf("invalid receiver: %s", split[1]), w, "Please supply a valid user or user group receiver")
+	if len(candidates) == 0 {
+		handleError(errors.New("no candidates found"), w, "Sorry, no potential recruits were found")
 		return
 	}
 
-	_, _, err := sc.PostMessage(s.ChannelID, slack.MsgOptionText(randomPhrase(s.UserID, newUserID), false))
+	newUserID := candidates[rand.Intn(len(candidates))]
+
+	_, _, err := sc.PostMessage(s.ChannelID, slack.MsgOptionText(randomPhrase(s.UserID, newUserID, userGroupID), false))
 	if hadError(err, w, errMessage) {
 		return
 	}
@@ -120,7 +140,7 @@ func passBall(w http.ResponseWriter, s slack.SlashCommand) {
 //go:embed phrases.txt
 var phrasesFile string
 
-func randomPhrase(from, to string) string {
+func randomPhrase(from, to, group string) string {
 	var phrases []string
 	for _, phrase := range strings.Split(phrasesFile, "\n") {
 		if phrase == "" {
@@ -138,8 +158,9 @@ func randomPhrase(from, to string) string {
 	buf := &bytes.Buffer{}
 
 	err = t.Execute(buf, map[string]string{
-		"From": fmt.Sprintf("<@%s>", from),
-		"To":   fmt.Sprintf("<@%s>", to),
+		"From":  fmt.Sprintf("<@%s>", from),
+		"To":    fmt.Sprintf("<@%s>", to),
+		"Group": fmt.Sprintf("<!subteam^%s>", group),
 	})
 	if err != nil {
 		panic(err.Error())
@@ -149,7 +170,7 @@ func randomPhrase(from, to string) string {
 }
 
 func parseUserGroupID(s string) (string, bool) {
-	r, err := regexp.Compile("<!subteam\\^(.*)\\|@.*>")
+	r, err := regexp.Compile("<!subteam\\^(S[A-Z0-9]*)(\\|.*)?>")
 	if err != nil {
 		panic(err.Error())
 	}
@@ -163,7 +184,7 @@ func parseUserGroupID(s string) (string, bool) {
 }
 
 func parseUserID(s string) (string, bool) {
-	r, err := regexp.Compile("<@(.*)>")
+	r, err := regexp.Compile("<@(U[A-Z0-9]*)(\\|.*)?>")
 	if err != nil {
 		panic(err.Error())
 	}
@@ -174,6 +195,34 @@ func parseUserID(s string) (string, bool) {
 	}
 
 	return submatches[1], true
+}
+
+func parseChannelID(s string) (string, bool) {
+	r, err := regexp.Compile("<#(C[A-Z0-9]*)(\\|.*)?>")
+	if err != nil {
+		panic(err.Error())
+	}
+
+	submatches := r.FindStringSubmatch(s)
+	if submatches == nil || len(submatches) < r.NumSubexp() {
+		return "", false
+	}
+
+	return submatches[1], true
+}
+
+func union(sss ...[]string) []string {
+	m := make(map[string]bool)
+	for _, ss := range sss {
+		for _, s := range ss {
+			m[s] = true
+		}
+	}
+	var l []string
+	for s := range m {
+		l = append(l, s)
+	}
+	return l
 }
 
 var errMessage = "Sorry, something has gone wrong!"

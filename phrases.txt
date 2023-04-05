@@ -1,5 +1,5 @@
-{{ .From }} you're off! {{ .To }} go and show them how it's done!
-{{ .From }} goes for the kick... and... THE CROWD GOES WILD!!! {{ .To }} has caught the ball! {{ .To }} you're in charge now
-{{ .From }} has fallen and broken their shinbone, {{ .To }} you can take over from here
-And with a swift maneuver {{ .To }} has dived in and stolen the ball! Sorry, {{ .From }} looks like you're out
-The coach has spoken, {{ .From }} you're out, you can pass the ball to {{ .To }} now
+{{ .From }} you're off! {{ .To }} go and show them how it's done! Take {{ .Group }} by the horns
+{{ .From }} goes for the kick... and... THE CROWD GOES WILD!!! {{ .To }} has caught the ball! {{ .To }} you're in charge of {{ .Group }} now
+{{ .From }} has fallen and broken their shinbone, {{ .To }} you can take over {{ .Group }} from here
+And with a swift maneuver {{ .To }} has dived in, stolen the ball, and taken {{ .Group }}! Sorry, {{ .From }} looks like you're out
+The coach has spoken, {{ .From }} you're out, you can pass {{ .Group }} to {{ .To }} now
