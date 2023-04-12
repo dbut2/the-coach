@@ -5,8 +5,6 @@ import (
 	_ "embed"
 	"errors"
 	"fmt"
-	"github.com/GoogleCloudPlatform/functions-framework-go/functions"
-	"github.com/slack-go/slack"
 	"io"
 	"log"
 	"math/rand"
@@ -15,6 +13,9 @@ import (
 	"regexp"
 	"strings"
 	"text/template"
+
+	"github.com/GoogleCloudPlatform/functions-framework-go/functions"
+	"github.com/slack-go/slack"
 )
 
 var (
@@ -117,6 +118,10 @@ func passBall(w http.ResponseWriter, s slack.SlashCommand) {
 	if len(candidates) == 0 {
 		handleError(errors.New("no candidates found"), w, "Sorry, no potential recruits were found")
 		return
+	}
+
+	if len(candidates) > 1 {
+		candidates = remove(candidates, s.UserID)
 	}
 
 	newUserID := candidates[rand.Intn(len(candidates))]
@@ -223,6 +228,17 @@ func union(sss ...[]string) []string {
 		l = append(l, s)
 	}
 	return l
+}
+
+func remove(s []string, item string) []string {
+	var result []string
+	for _, str := range s {
+		if str == item {
+			continue
+		}
+		result = append(result, str)
+	}
+	return result
 }
 
 var errMessage = "Sorry, something has gone wrong!"
