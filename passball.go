@@ -3,6 +3,7 @@ package football
 import (
 	"bytes"
 	_ "embed"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -14,7 +15,6 @@ import (
 	"strings"
 	"text/template"
 
-	"github.com/GoogleCloudPlatform/functions-framework-go/functions"
 	"github.com/slack-go/slack"
 )
 
@@ -23,11 +23,7 @@ var (
 	slackBotToken      = os.Getenv("SLACK_BOT_TOKEN")
 )
 
-func init() {
-	functions.HTTP("PassBall", PassBallFunction)
-}
-
-func PassBallFunction(w http.ResponseWriter, r *http.Request) {
+func PassBall(w http.ResponseWriter, r *http.Request) {
 	verifier, err := slack.NewSecretsVerifier(r.Header, slackSigningSecret)
 	if hadError(err, w, errMessage) {
 		return
@@ -44,80 +40,81 @@ func PassBallFunction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	handleRequestSlash(w, s)
-}
-
-func handleRequestSlash(w http.ResponseWriter, s slack.SlashCommand) {
-	switch s.Command {
-	case "/passball":
-		passBall(w, s)
-	default:
-		handleError(fmt.Errorf("unknown command: %s", s.Command), w, fmt.Sprintf("Unknown command: %s", s.Command))
+	err = handleRequestSlash(s)
+	if hadError(err, w, fmt.Sprintf("%s: %s", errMessage, err.Error())) {
+		return
 	}
 }
 
-func passBall(w http.ResponseWriter, s slack.SlashCommand) {
-	split := strings.Split(strings.TrimSpace(s.Text), " ")
+func handleRequestSlash(s slack.SlashCommand) error {
+	sc := slack.New(slackBotToken)
 
-	if len(split) < 1 {
-		handleError(errors.New("no usergroup supplied"), w, "Please supply a user group")
-		return
+	if s.Text != "" {
+		msg, err := prepareDescriptionMessage(s.Text)
+		if err != nil {
+			return err
+		}
+
+		_, err = sc.PostEphemeral(s.ChannelID, s.UserID, slack.MsgOptionText(msg, true))
+		if err != nil {
+			return err
+		}
+
+		return nil
 	}
 
-	userGroupID, is := parseUserGroupID(split[0])
-	if !is {
-		handleError(fmt.Errorf("invalid usergroup: %s", split[0]), w, "Please supply a valid user group")
-		return
-	}
+	return passBall(sc, s)
+}
 
+type config struct {
+	From string   `json:"from"`
+	To   []string `json:"to"`
+}
+
+func prepareDescriptionMessage(args string) (string, error) {
+	split := strings.Split(args, " ")
 	if len(split) < 2 {
-		handleError(errors.New("no receiver supplied"), w, "Please supply at least one user or user group receiver")
-		return
+		return "Please enter a user group to pass from and one to pass to", nil
 	}
 
-	sc := slack.New(os.Getenv("SLACK_BOT_TOKEN"))
+	c := &config{
+		From: split[0],
+		To:   split[1:],
+	}
 
-	var candidates []string
+	b, err := json.Marshal(c)
+	if err != nil {
+		return "", err
+	}
 
-	for _, receiver := range split[1:] {
-		parsed := false
+	return fmt.Sprintf("Add the following line to the channel description:\ncoach-peter: %s", string(b)), nil
+}
 
-		if receiverUserGroupID, is := parseUserGroupID(receiver); is {
-			userIDs, err := sc.GetUserGroupMembers(receiverUserGroupID)
-			if hadError(err, w, errMessage) {
-				return
-			}
+func passBall(sc *slack.Client, s slack.SlashCommand) error {
+	info, err := sc.GetConversationInfo(&slack.GetConversationInfoInput{
+		ChannelID: s.ChannelID,
+	})
+	if err != nil {
+		return err
+	}
 
-			parsed = true
-			candidates = union(candidates, userIDs)
-		}
+	c, err := parseDescription(info.Purpose)
+	if err != nil {
+		return err
+	}
 
-		if receiverUserID, is := parseUserID(receiver); is {
-			parsed = true
-			candidates = union(candidates, []string{receiverUserID})
-		}
+	userGroupID, is := parseUserGroupID(c.From)
+	if !is {
+		return errors.New("invalid user group supplied")
+	}
 
-		if receiverChannelID, is := parseChannelID(receiver); is {
-			userIDs, _, err := sc.GetUsersInConversation(&slack.GetUsersInConversationParameters{
-				ChannelID: receiverChannelID,
-			})
-			if hadError(err, w, errMessage) {
-				return
-			}
-
-			parsed = true
-			candidates = union(candidates, userIDs)
-		}
-
-		if !parsed {
-			handleError(fmt.Errorf("invalid receiver: %s", receiver), w, "Please supply valid user or user group receivers")
-			return
-		}
+	candidates, err := getCandidates(sc, c.To)
+	if err != nil {
+		return err
 	}
 
 	if len(candidates) == 0 {
-		handleError(errors.New("no candidates found"), w, "Sorry, no potential recruits were found")
-		return
+		return errors.New("no candidates found")
 	}
 
 	if len(candidates) > 1 {
@@ -126,20 +123,17 @@ func passBall(w http.ResponseWriter, s slack.SlashCommand) {
 
 	newUserID := candidates[rand.Intn(len(candidates))]
 
-	_, _, err := sc.PostMessage(s.ChannelID, slack.MsgOptionText(randomPhrase(s.UserID, newUserID, userGroupID), false))
-	if hadError(err, w, errMessage) {
-		return
+	_, _, err = sc.PostMessage(s.ChannelID, slack.MsgOptionText(randomPhrase(s.UserID, newUserID, userGroupID), false))
+	if err != nil {
+		return err
 	}
 
 	_, err = sc.UpdateUserGroupMembers(userGroupID, newUserID)
-	if hadError(err, w, errMessage) {
-		return
+	if err != nil {
+		return err
 	}
 
-	w.Header().Set("content-type", "application/json")
-	if hadError(err, w, errMessage) {
-		return
-	}
+	return nil
 }
 
 //go:embed phrases.txt
@@ -216,6 +210,46 @@ func parseChannelID(s string) (string, bool) {
 	return submatches[1], true
 }
 
+func getCandidates(sc *slack.Client, receivers []string) ([]string, error) {
+	var candidates []string
+
+	for _, receiver := range receivers {
+		parsed := false
+
+		if receiverUserGroupID, is := parseUserGroupID(receiver); is {
+			userIDs, err := sc.GetUserGroupMembers(receiverUserGroupID)
+			if err != nil {
+				return nil, err
+			}
+
+			parsed = true
+			candidates = union(candidates, userIDs)
+		}
+
+		if receiverUserID, is := parseUserID(receiver); is {
+			parsed = true
+			candidates = union(candidates, []string{receiverUserID})
+		}
+
+		if receiverChannelID, is := parseChannelID(receiver); is {
+			userIDs, _, err := sc.GetUsersInConversation(&slack.GetUsersInConversationParameters{
+				ChannelID: receiverChannelID,
+			})
+			if err != nil {
+				return nil, err
+			}
+
+			parsed = true
+			candidates = union(candidates, userIDs)
+		}
+
+		if !parsed {
+			return nil, fmt.Errorf("invalid receiver: %s", receiver)
+		}
+	}
+	return candidates, nil
+}
+
 func union(sss ...[]string) []string {
 	m := make(map[string]bool)
 	for _, ss := range sss {
@@ -241,7 +275,30 @@ func remove(s []string, item string) []string {
 	return result
 }
 
-var errMessage = "Sorry, something has gone wrong!"
+func parseDescription(description slack.Purpose) (*config, error) {
+	for _, line := range strings.Split(description.Value, "\n") {
+		split := strings.SplitN(line, ":", 2)
+		if len(split) < 2 {
+			continue
+		}
+
+		if strings.TrimSpace(split[0]) != "coach-peter" {
+			continue
+		}
+
+		b := []byte(strings.TrimSpace(split[1]))
+		c := new(config)
+		err := json.Unmarshal(b, c)
+		if err != nil {
+			return nil, err
+		}
+		return c, nil
+	}
+
+	return nil, errors.New("no config found in description")
+}
+
+var errMessage = "Sorry, something has gone wrong"
 
 func hadError(err error, w http.ResponseWriter, message string) bool {
 	if err == nil {
