@@ -41,7 +41,12 @@ func PassBall(w http.ResponseWriter, r *http.Request) {
 	}
 
 	err = handleRequestSlash(s)
-	if hadError(err, w, fmt.Sprintf("%s: %s", errMessage, err.Error())) {
+	if hadError(err, w, func() string {
+		if err == nil {
+			return "No error"
+		}
+		return fmt.Sprintf("%s: %s", errMessage, err.Error())
+	}()) {
 		return
 	}
 }
